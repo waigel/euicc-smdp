@@ -1,0 +1,3 @@
+[submodule "vendor/euicc-rsp"]
+	path = vendor/euicc-rsp
+	url = git@github.com:waigel/euicc-rsp.git

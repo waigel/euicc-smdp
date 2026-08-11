@@ -1,0 +1,11 @@
+[package]
+name = "rsp-sys"
+version = "0.1.0"
+edition = "2021"
+publish = false
+# This crate owns the native euicc-rsp library. Declaring it here is what
+# stops a second crate from linking a second copy.
+links = "rsp"
+
+[build-dependencies]
+bindgen = "0.72.1"
