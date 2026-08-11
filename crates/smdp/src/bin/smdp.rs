@@ -9,6 +9,7 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 
+use smdp::server::{router, ServerConfig};
 use smdp::service;
 use smdp::store::sqlite::SqliteStore;
 
@@ -24,6 +25,19 @@ enum Command {
     /// Profile orders: what an eUICC can come and download.
     #[command(subcommand)]
     Order(OrderCommand),
+    /// Answer ES9+ over HTTP.
+    Serve {
+        #[arg(long, default_value = "smdp.db")]
+        db: PathBuf,
+        /// The address to listen on.
+        #[arg(long, default_value = "127.0.0.1:8080")]
+        addr: String,
+        /// This SM-DP+'s own address, as an LPA knows it. Signed into
+        /// serverSigned1, and what a received smdpAddress is checked
+        /// against (SGP.22 section 5.6.1).
+        #[arg(long)]
+        server_address: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -77,8 +91,27 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
+#[tokio::main(flavor = "current_thread")]
+async fn serve(db: PathBuf, addr: String, server_address: String) -> Result<(), String> {
+    let store = std::sync::Arc::new(SqliteStore::open(&db).map_err(|e| e.to_string())?);
+    let app = router(store, ServerConfig::new(&server_address));
+    let listener = tokio::net::TcpListener::bind(&addr)
+        .await
+        .map_err(|e| format!("{addr}: {e}"))?;
+    let bound = listener.local_addr().map_err(|e| e.to_string())?;
+    // SGP.22 section 6.1 requires TLS on ES9+. Serving cleartext while
+    // looking like an SM-DP+ is worse than saying so out loud.
+    eprintln!("smdp: listening on http://{bound} (no TLS) as {server_address}");
+    axum::serve(listener, app).await.map_err(|e| e.to_string())
+}
+
 fn run() -> Result<(), String> {
     match Cli::parse().command {
+        Command::Serve {
+            db,
+            addr,
+            server_address,
+        } => serve(db, addr, server_address),
         Command::Order(OrderCommand::Add {
             db,
             upp,

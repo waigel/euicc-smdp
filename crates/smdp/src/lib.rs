@@ -4,5 +4,6 @@
 //! library. The server built on top of it does not exist yet.
 pub mod es9;
 pub mod rsp;
+pub mod server;
 pub mod service;
 pub mod store;

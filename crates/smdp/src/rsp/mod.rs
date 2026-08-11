@@ -6,6 +6,33 @@ pub use owned::OwnedDer;
 
 use std::ffi::CString;
 use std::ptr;
+use std::sync::{Mutex, MutexGuard};
+
+/// euicc-rsp is not thread-safe, so this serializes every call into it.
+///
+/// Its vendored mbedTLS is built without MBEDTLS_THREADING_C, which
+/// leaves mbedTLS's shared state unprotected. Measured rather than
+/// assumed: six parallel runs of this crate's own session tests
+/// segfaulted four times, and the same tests run serially never did.
+///
+/// A per-session lock would not be enough -- the collision is between
+/// *different* sessions, and the shared state is inside the library, not
+/// in any one session. So the lock lives here, at the only boundary
+/// every caller has to cross, rather than in the server where a second
+/// consumer could forget it.
+///
+/// The cost is that cryptographic work does not run in parallel. For a
+/// server whose sessions already live in one process, that is a price
+/// worth stating and paying. Enabling MBEDTLS_THREADING_C in euicc-rsp
+/// would be the way to stop paying it.
+static RSP_LOCK: Mutex<()> = Mutex::new(());
+
+/// Poisoning is not meaningful here: the guard protects a C library's
+/// internals, not a Rust invariant this crate could observe as broken.
+/// A panic in one call must not make every later one fail.
+fn lock() -> MutexGuard<'static, ()> {
+    RSP_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
 
 /// One RSP session's server-side state, from InitiateAuthentication to
 /// GetBoundProfilePackage.
@@ -18,6 +45,7 @@ pub struct DpSession {
 
 impl Drop for DpSession {
     fn drop(&mut self) {
+        let _guard = lock();
         unsafe { rsp_sys::rsp_dp_session_free(self.raw) }
     }
 }
@@ -55,6 +83,7 @@ impl DpSession {
         let mut resp: *mut u8 = ptr::null_mut();
         let mut resp_len: usize = 0;
 
+        let _guard = lock();
         let rc = unsafe {
             rsp_sys::rsp_dp_initiate_authentication(
                 euicc_challenge.as_ptr(),
@@ -106,6 +135,7 @@ impl DpSession {
         const WHAT: &str = "AuthenticateClient";
         let mut out: *mut u8 = ptr::null_mut();
         let mut out_len: usize = 0;
+        let _guard = lock();
         let rc = unsafe {
             rsp_sys::rsp_dp_authenticate_client(
                 self.raw,
@@ -137,6 +167,7 @@ impl DpSession {
         const WHAT: &str = "GetBoundProfilePackage";
         let mut bpp: *mut u8 = ptr::null_mut();
         let mut bpp_len: usize = 0;
+        let _guard = lock();
         let rc = unsafe {
             rsp_sys::rsp_dp_get_bound_profile_package(
                 self.raw,
@@ -162,6 +193,7 @@ impl DpSession {
         const WHAT: &str = "session EID";
         let mut buf = [0u8; 64];
         let mut len: usize = 0;
+        let _guard = lock();
         let rc = unsafe {
             rsp_sys::rsp_dp_session_eid(self.raw, buf.as_mut_ptr(), buf.len(), &mut len)
         };
@@ -255,3 +287,14 @@ pub fn authenticate_fields(resp: &[u8]) -> Result<AuthenticateFields<'_>> {
         })
     }
 }
+
+// Safety: rsp_dp_session_t is a plain heap struct that euicc-rsp only
+// ever touches through the pointer it is handed; the library keeps no
+// thread-local state for it, and every function taking one takes it as a
+// parameter. Moving one between threads is therefore sound, which is
+// what an axum handler needs.
+//
+// Send only -- deliberately never Sync. Two threads inside one session
+// at once is not something the C side promises anything about, which is
+// why every session lives behind a Mutex.
+unsafe impl Send for DpSession {}
