@@ -155,3 +155,34 @@ fn a_truncated_response_is_refused_by_the_accessors() {
         .expect_err("half a response is not a response");
     assert!(matches!(err, RspError::Refused(_)), "{err:?}");
 }
+
+#[test]
+fn many_threads_may_open_sessions_at_once() {
+    // euicc-rsp's vendored mbedTLS is built without MBEDTLS_THREADING_C,
+    // so the library is not thread-safe and the wrapper serializes every
+    // call into it. Without that lock this test segfaults; with it, it
+    // passes. It is the only thing standing between a two-request server
+    // and a crash.
+    let challenge = arr16("euicc-challenge.bin");
+    let info1 = fixture("euicc-info1.der");
+    let tid = arr16("transaction-id.bin");
+    let sc = arr16("server-challenge.bin");
+    let expected = fixture("initiate-response.der");
+
+    let threads: Vec<_> = (0..8)
+        .map(|_| {
+            let (info1, expected) = (info1.clone(), expected.clone());
+            std::thread::spawn(move || {
+                for _ in 0..8 {
+                    let (_s, resp) =
+                        DpSession::initiate(&challenge, &info1, &tid, &sc, ADDR, Some(ADDR))
+                            .expect("a session opens");
+                    assert_eq!(resp.as_slice(), expected.as_slice());
+                }
+            })
+        })
+        .collect();
+    for t in threads {
+        t.join().expect("no thread may die");
+    }
+}
