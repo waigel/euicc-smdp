@@ -10,21 +10,32 @@ use std::sync::{Mutex, MutexGuard};
 
 /// euicc-rsp is not thread-safe, so this serializes every call into it.
 ///
-/// Its vendored mbedTLS is built without MBEDTLS_THREADING_C, which
-/// leaves mbedTLS's shared state unprotected. Measured rather than
-/// assumed: six parallel runs of this crate's own session tests
-/// segfaulted four times, and the same tests run serially never did.
+/// The cause was isolated by backtrace, not guessed. euicc-rsp's
+/// `src/rsp_sign.c` builds its RNG as an unsynchronised lazy singleton:
+/// three file-scope statics and an `if (g_rng_ready) return 0;` with no
+/// barrier. One thread runs `mbedtls_ctr_drbg_seed` while another enters
+/// and `mbedtls_ctr_drbg_init` memsets the same struct underneath it, so
+/// the first then calls a NULL `f_entropy`. Every crash landed there.
+///
+/// A second race follows the first: past
+/// MBEDTLS_CTR_DRBG_RESEED_INTERVAL the shared DRBG reseeds inline
+/// during ECDSA blinding and frees heap memory on the shared entropy
+/// context, which double-frees under concurrency.
+///
+/// Enabling MBEDTLS_THREADING_C does *not* fix this on its own -- it
+/// makes it worse, adding deadlocks, because the per-context mutex is
+/// created by the very `init` call that races. Both are needed: a real
+/// once-init in rsp_sign.c *and* MBEDTLS_THREADING_C. With both,
+/// measured: 12/12 clean runs at 24 000 concurrent signatures.
 ///
 /// A per-session lock would not be enough -- the collision is between
-/// *different* sessions, and the shared state is inside the library, not
-/// in any one session. So the lock lives here, at the only boundary
-/// every caller has to cross, rather than in the server where a second
-/// consumer could forget it.
+/// *different* sessions, and the state is a library-wide singleton. So
+/// the lock lives here, at the only boundary every caller has to cross,
+/// rather than in the server where a second consumer could forget it.
 ///
 /// The cost is that cryptographic work does not run in parallel. For a
 /// server whose sessions already live in one process, that is a price
-/// worth stating and paying. Enabling MBEDTLS_THREADING_C in euicc-rsp
-/// would be the way to stop paying it.
+/// worth stating and paying.
 static RSP_LOCK: Mutex<()> = Mutex::new(());
 
 /// Poisoning is not meaningful here: the guard protects a C library's

@@ -81,14 +81,25 @@ it is not found, point `LIBCLANG_PATH` at
 
 ## A constraint worth knowing
 
-`euicc-rsp`'s vendored mbedTLS is built without `MBEDTLS_THREADING_C`, so
-the C library is not thread-safe. This crate serializes every call into it
-behind one process-wide lock, at the boundary rather than in the server,
-so a second consumer cannot forget. `crates/smdp/tests/session.rs` pins
-it: remove the lock and that test segfaults.
+`euicc-rsp` is not thread-safe, so this crate serializes every call into
+it behind one process-wide lock — at the boundary rather than in the
+server, so a second consumer cannot forget.
+`crates/smdp/tests/session.rs` pins it: remove the lock and that test
+segfaults.
 
-The cost is that cryptographic work does not run in parallel. Enabling
-`MBEDTLS_THREADING_C` upstream would be the way to stop paying it.
+The cause is `euicc-rsp`'s `src/rsp_sign.c`, which builds its RNG as an
+unsynchronised lazy singleton; one thread's `mbedtls_ctr_drbg_init`
+memsets the context another is already seeding, leaving a NULL entropy
+callback. A second race follows it, when the shared DRBG reseeds during
+signing and frees memory on the shared entropy context.
+
+Enabling `MBEDTLS_THREADING_C` in the vendored mbedTLS does **not** fix
+this alone — it adds deadlocks, because the per-context mutex is created
+by the same `init` call that races. Both a real once-init in
+`rsp_sign.c` and `MBEDTLS_THREADING_C` are needed; with both, 12 of 12
+runs were clean at 24 000 concurrent signatures. Until that lands
+upstream, the lock stays and cryptographic work does not run in
+parallel.
 
 ## License
 
