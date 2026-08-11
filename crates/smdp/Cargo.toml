@@ -5,7 +5,10 @@ edition = "2021"
 publish = false
 
 [dependencies]
+base64 = "0.23.1"
 clap = { version = "4.6.6", features = ["derive"] }
 getrandom = "0.4.3"
 rsp-sys = { path = "../rsp-sys" }
 rusqlite = { version = "0.40.2", features = ["bundled"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
