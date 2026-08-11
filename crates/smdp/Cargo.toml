@@ -6,3 +6,4 @@ publish = false
 
 [dependencies]
 rsp-sys = { path = "../rsp-sys" }
+rusqlite = { version = "0.40.2", features = ["bundled"] }
