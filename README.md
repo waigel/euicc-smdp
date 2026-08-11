@@ -5,10 +5,13 @@ The SM-DP+ of SGP.22, as a server. It stands on
 itself, and adds the two things a library deliberately does not have: a
 network, and a memory of which eUICC was given which Profile.
 
-Right now it has neither. What exists is the boundary between Rust and the
-C library — a workspace whose `rsp-sys` crate builds `euicc-rsp`, links it,
-and can call it. That is a small claim and it is the only one this
-repository currently makes.
+Right now it has neither. What exists is the protocol, reachable from
+Rust: a whole SM-DP+ session — `InitiateAuthentication`,
+`AuthenticateClient`, `GetBoundProfilePackage` — runs against recorded
+eUICC bytes and produces a Bound Profile Package byte-identical to the one
+`euicc-rsp` produces for the same inputs. No card, no network, no
+database. That is the claim this repository currently makes, and the tests
+are what make it.
 
 | Repository | Role |
 | --- | --- |

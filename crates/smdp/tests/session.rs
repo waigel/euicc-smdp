@@ -85,3 +85,73 @@ fn a_malformed_euicc_info1_never_reaches_the_question() {
         "malformed input is a question never reached: {err:?}"
     );
 }
+
+#[test]
+fn the_whole_session_runs_and_yields_a_bound_profile_package() {
+    let (mut s, init_resp) = DpSession::initiate(
+        &arr16("euicc-challenge.bin"),
+        &fixture("euicc-info1.der"),
+        &arr16("transaction-id.bin"),
+        &arr16("server-challenge.bin"),
+        ADDR,
+        Some(ADDR),
+    )
+    .expect("the session opens");
+
+    // The five fields the ES9+ JSON binding names (section 6.5.2.6),
+    // borrowed from the response rather than rebuilt from a decode.
+    let f = smdp::rsp::initiate_fields(init_resp.as_slice()).expect("fields slice out");
+    assert_eq!(
+        f.transaction_id[0], 0x80,
+        "transactionId is [0] implicit -- rsp-2.5.asn is AUTOMATIC TAGS"
+    );
+    assert_eq!(&f.server_signature1[..2], &[0x5f, 0x37], "[APPLICATION 55]");
+    assert!(
+        f.server_signed1.as_ptr() < f.server_signature1.as_ptr(),
+        "the walk is positional: serverSigned1 comes first"
+    );
+
+    let ac = s
+        .authenticate_client(
+            &fixture("auth-server-response.der"),
+            &fixture("store-metadata.der"),
+        )
+        .expect("the recorded eUICC authenticates");
+    assert_eq!(
+        ac.as_slice(),
+        fixture("authenticate-response.der").as_slice(),
+        "the AuthenticateClient response differs from the recorded one"
+    );
+
+    let g = smdp::rsp::authenticate_fields(ac.as_slice()).expect("fields slice out");
+    assert_eq!(&g.profile_metadata[..2], &[0xbf, 0x25], "profileMetaData is [37]");
+    assert_eq!(g.smdp_signature2.len(), 67, "'5F 37 40' and 64 of signature");
+
+    let eid = s.eid().expect("the session learned an EID");
+    assert!(
+        eid.len() == 32 && eid.chars().all(|c| c.is_ascii_digit()),
+        "an EID is 32 decimal digits: {eid}"
+    );
+
+    let otsk_dp: [u8; 32] = fixture("otsk-dp.bin").try_into().expect("32 bytes");
+    let bpp = s
+        .get_bound_profile_package(
+            &fixture("prepare-download-response.der"),
+            &fixture("upp.der"),
+            &otsk_dp,
+        )
+        .expect("a Bound Profile Package comes back");
+    assert_eq!(
+        bpp.as_slice(),
+        fixture("bound-profile-package.der").as_slice(),
+        "the BPP differs from the one euicc-rsp recorded"
+    );
+}
+
+#[test]
+fn a_truncated_response_is_refused_by_the_accessors() {
+    let resp = fixture("initiate-response.der");
+    let err = smdp::rsp::initiate_fields(&resp[..resp.len() / 2])
+        .expect_err("half a response is not a response");
+    assert!(matches!(err, RspError::Refused(_)), "{err:?}");
+}
