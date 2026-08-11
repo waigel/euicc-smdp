@@ -37,6 +37,12 @@ enum Command {
         /// against (SGP.22 section 5.6.1).
         #[arg(long)]
         server_address: String,
+        /// PEM certificate chain. Requires --tls-key.
+        #[arg(long, requires = "tls_key")]
+        tls_cert: Option<PathBuf>,
+        /// PEM private key. Requires --tls-cert.
+        #[arg(long, requires = "tls_cert")]
+        tls_key: Option<PathBuf>,
     },
 }
 
@@ -92,17 +98,43 @@ fn hex(bytes: &[u8]) -> String {
 }
 
 #[tokio::main(flavor = "current_thread")]
-async fn serve(db: PathBuf, addr: String, server_address: String) -> Result<(), String> {
+async fn serve(
+    db: PathBuf,
+    addr: String,
+    server_address: String,
+    tls: Option<(PathBuf, PathBuf)>,
+) -> Result<(), String> {
     let store = std::sync::Arc::new(SqliteStore::open(&db).map_err(|e| e.to_string())?);
     let app = router(store, ServerConfig::new(&server_address));
-    let listener = tokio::net::TcpListener::bind(&addr)
-        .await
-        .map_err(|e| format!("{addr}: {e}"))?;
-    let bound = listener.local_addr().map_err(|e| e.to_string())?;
-    // SGP.22 section 6.1 requires TLS on ES9+. Serving cleartext while
-    // looking like an SM-DP+ is worse than saying so out loud.
-    eprintln!("smdp: listening on http://{bound} (no TLS) as {server_address}");
-    axum::serve(listener, app).await.map_err(|e| e.to_string())
+    let bound: std::net::SocketAddr = addr
+        .parse()
+        .map_err(|e| format!("{addr} is not an address: {e}"))?;
+
+    match tls {
+        Some((cert, key)) => {
+            let config = axum_server::tls_rustls::RustlsConfig::from_pem_file(&cert, &key)
+                .await
+                .map_err(|e| format!("{} / {}: {e}", cert.display(), key.display()))?;
+            eprintln!("smdp: listening on https://{bound} as {server_address}");
+            axum_server::bind_rustls(bound, config)
+                .serve(app.into_make_service())
+                .await
+                .map_err(|e| e.to_string())
+        }
+        None => {
+            let listener = tokio::net::TcpListener::bind(bound)
+                .await
+                .map_err(|e| format!("{addr}: {e}"))?;
+            // SGP.22 section 6.1 requires TLS on ES9+. A server that
+            // quietly speaks cleartext while looking like an SM-DP+ is
+            // worse than one that announces it.
+            eprintln!(
+                "smdp: listening on http://{bound} as {server_address} \
+                 -- NO TLS, which SGP.22 section 6.1 requires on ES9+"
+            );
+            axum::serve(listener, app).await.map_err(|e| e.to_string())
+        }
+    }
 }
 
 fn run() -> Result<(), String> {
@@ -111,7 +143,14 @@ fn run() -> Result<(), String> {
             db,
             addr,
             server_address,
-        } => serve(db, addr, server_address),
+            tls_cert,
+            tls_key,
+        } => serve(
+            db,
+            addr,
+            server_address,
+            tls_cert.zip(tls_key),
+        ),
         Command::Order(OrderCommand::Add {
             db,
             upp,
