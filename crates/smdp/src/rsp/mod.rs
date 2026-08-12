@@ -161,6 +161,23 @@ impl DpSession {
         Ok(unsafe { OwnedDer::from_raw(bpp, bpp_len) })
     }
 
+    /// CERT.EUICC.ECDSA, as [`Self::authenticate_client`] learned it.
+    ///
+    /// Copied out rather than borrowed: a server needs it after the
+    /// session is gone, which is the whole reason it is kept. A
+    /// ProfileInstallationResult carries no certificate of its own, so
+    /// without this there is nothing to check its signature against.
+    pub fn euicc_cert(&self) -> Result<Vec<u8>> {
+        const WHAT: &str = "session eUICC certificate";
+        let mut der: *const u8 = ptr::null();
+        let mut len: usize = 0;
+        let rc = unsafe { rsp_sys::rsp_dp_session_euicc_cert(self.raw, &mut der, &mut len) };
+        if rc != 0 {
+            return Err(RspError::from_code(rc, WHAT));
+        }
+        Ok(unsafe { std::slice::from_raw_parts(der, len) }.to_vec())
+    }
+
     /// The EID [`Self::authenticate_client`] learned from
     /// CERT.EUICC.ECDSA's own Subject `serialNumber` -- decimal digits,
     /// and never NUL-terminated by the C side.
@@ -270,3 +287,88 @@ pub fn authenticate_fields(resp: &[u8]) -> Result<AuthenticateFields<'_>> {
 // at once is not something the C side promises anything about, which is
 // why every session lives behind a Mutex.
 unsafe impl Send for DpSession {}
+
+/// What a verified notification turned out to be.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Notification {
+    pub is_installation_result: bool,
+    pub seq_number: i64,
+    /// 0 install, 1 enable, 2 disable, 3 delete, or -1 when the eUICC
+    /// set no single bit.
+    pub operation: i32,
+    pub iccid: Option<[u8; 10]>,
+    /// Only meaningful for an installation result.
+    pub installed: bool,
+}
+
+/// Read a notification's metadata without verifying anything.
+///
+/// The certificate a ProfileInstallationResult must be checked against
+/// is found by ICCID, and the ICCID is inside the notification -- so
+/// something has to read it before there is anything to verify with.
+///
+/// Nothing this returns is evidence. Look a certificate up with it, then
+/// ask [`verify_notification`] the real question. `installed` is always
+/// false here whatever the notification claims.
+pub fn notification_metadata(notification: &[u8]) -> Result<Notification> {
+    const WHAT: &str = "notification metadata";
+    let mut out = std::mem::MaybeUninit::<rsp_sys::rsp_notification_t>::zeroed();
+    let rc = unsafe {
+        rsp_sys::rsp_dp_notification_metadata(
+            notification.as_ptr(),
+            notification.len(),
+            out.as_mut_ptr(),
+        )
+    };
+    if rc != 0 {
+        return Err(RspError::from_code(rc, WHAT));
+    }
+    let v = unsafe { out.assume_init() };
+    Ok(Notification {
+        is_installation_result: v.is_installation_result != 0,
+        seq_number: v.seq_number,
+        operation: v.operation,
+        iccid: (v.have_iccid != 0).then_some(v.iccid),
+        installed: false,
+    })
+}
+
+/// Is this pending notification genuinely an eUICC's, and what does it
+/// say?
+///
+/// `cert_euicc` is required for a ProfileInstallationResult, which
+/// carries no certificates of its own; an OtherSignedNotification brings
+/// CERT.EUICC and CERT.EUM with it and verifies with `None`. When a
+/// certificate is given for that arm it must be the embedded one.
+///
+/// There is no transactionId to bind against, so this answers "did this
+/// eUICC sign this" and never "does this belong to that order".
+/// Correlating is the caller's job, by ICCID.
+pub fn verify_notification(cert_euicc: Option<&[u8]>, notification: &[u8]) -> Result<Notification> {
+    const WHAT: &str = "HandleNotification";
+    let mut out = std::mem::MaybeUninit::<rsp_sys::rsp_notification_t>::zeroed();
+    let (cert_ptr, cert_len) = match cert_euicc {
+        Some(c) => (c.as_ptr(), c.len()),
+        None => (ptr::null(), 0),
+    };
+    let rc = unsafe {
+        rsp_sys::rsp_dp_verify_notification(
+            cert_ptr,
+            cert_len,
+            notification.as_ptr(),
+            notification.len(),
+            out.as_mut_ptr(),
+        )
+    };
+    if rc != 0 {
+        return Err(RspError::from_code(rc, WHAT));
+    }
+    let v = unsafe { out.assume_init() };
+    Ok(Notification {
+        is_installation_result: v.is_installation_result != 0,
+        seq_number: v.seq_number,
+        operation: v.operation,
+        iccid: (v.have_iccid != 0).then_some(v.iccid),
+        installed: v.installed != 0,
+    })
+}

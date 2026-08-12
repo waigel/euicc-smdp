@@ -336,3 +336,106 @@ async fn a_downloaded_order_is_not_offered_again() {
         "a Profile already handed out must not be handed out again: {r}"
     );
 }
+
+#[tokio::test]
+async fn a_notification_is_taken_verified_and_kept() {
+    // SGP.22 Table 57 gives HandleNotification the Notification MEP, and
+    // section 6.3 says what that means: 204 with an empty body. There is
+    // no functionExecutionStatus to answer in, which is right -- an LPA
+    // has no key to verify with and nothing to do with a verdict.
+    let store = seeded();
+
+    // The server can only check a ProfileInstallationResult against the
+    // certificate it kept when that ICCID was downloaded, so the
+    // download has to have happened.
+    let addr = spawn(store.clone()).await;
+    let c = reqwest::Client::new();
+    let (_, r) = call(
+        &c,
+        &addr,
+        "initiateAuthentication",
+        json!({
+            "euiccChallenge": b64(&fixture("euicc-challenge.bin")),
+            "euiccInfo1": b64(&fixture("euicc-info1.der")),
+            "smdpAddress": ADDR,
+        }),
+    )
+    .await;
+    let tid = r["transactionId"].as_str().unwrap().to_string();
+    call(
+        &c,
+        &addr,
+        "authenticateClient",
+        json!({
+            "transactionId": tid,
+            "authenticateServerResponse": b64(&fixture("auth-server-response.der")),
+        }),
+    )
+    .await;
+
+    let o = store.order_by_matching_id("MATCH-1").unwrap().unwrap();
+    assert!(
+        o.euicc_cert.is_some(),
+        "the download must have kept a certificate"
+    );
+
+    let resp = c
+        .post(format!(
+            "http://{addr}/gsma/rsp2/es9plus/handleNotification"
+        ))
+        .json(&json!({ "pendingNotification": b64(&fixture("pending-notification.der")) }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 204, "the Notification MEP answers 204");
+    assert!(
+        resp.bytes().await.unwrap().is_empty(),
+        "and with an empty body"
+    );
+
+    let kept = store.notifications().unwrap();
+    assert_eq!(kept.len(), 1, "the verified notification was kept");
+    assert_eq!(
+        kept[0].order_id,
+        Some(o.id),
+        "matched to its order by ICCID"
+    );
+    assert_eq!(
+        kept[0].installed,
+        Some(true),
+        "and it says the profile installed"
+    );
+    assert_eq!(
+        kept[0].raw,
+        fixture("pending-notification.der"),
+        "kept as it arrived -- the eUICC signed over these bytes"
+    );
+}
+
+#[tokio::test]
+async fn a_notification_that_does_not_verify_is_still_answered_but_not_kept() {
+    // Refusing would leave it on the eUICC forever, filling a queue that
+    // SGP.22 section 3.5 has the card start refusing profile management
+    // over. What a rejection does is leave nothing in the store, and
+    // that absence is the record.
+    let store = seeded();
+    let addr = spawn(store.clone()).await;
+
+    let mut tampered = fixture("pending-notification.der");
+    let n = tampered.len();
+    tampered[n - 20] ^= 0x01;
+
+    let resp = reqwest::Client::new()
+        .post(format!(
+            "http://{addr}/gsma/rsp2/es9plus/handleNotification"
+        ))
+        .json(&json!({ "pendingNotification": b64(&tampered) }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 204, "an LPA is told nothing either way");
+    assert!(
+        store.notifications().unwrap().is_empty(),
+        "but nothing unverified is kept"
+    );
+}

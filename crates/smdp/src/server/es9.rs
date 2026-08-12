@@ -23,11 +23,14 @@ use axum::{
 
 use crate::es9::{
     AuthenticateClientRequest, AuthenticateClientResponse, FailureResponse,
-    GetBoundProfilePackageRequest, GetBoundProfilePackageResponse, InitiateAuthenticationRequest,
-    InitiateAuthenticationResponse, ResponseHeader, ADMIN_PROTOCOL,
+    GetBoundProfilePackageRequest, GetBoundProfilePackageResponse, HandleNotificationRequest,
+    InitiateAuthenticationRequest, InitiateAuthenticationResponse, ResponseHeader, ADMIN_PROTOCOL,
 };
-use crate::rsp::{authenticate_fields, initiate_fields, DpSession, RspError};
-use crate::store::OrderState;
+use crate::rsp::{
+    authenticate_fields, initiate_fields, notification_metadata, verify_notification, DpSession,
+    RspError,
+};
+use crate::store::{NewNotification, OrderState};
 
 use super::AppState;
 
@@ -198,6 +201,7 @@ pub async fn authenticate_client(
         Err(e) => return from_rsp_error(e, code::TRANSACTION_ID),
     };
     let eid = entry.session.eid().ok();
+    let cert = entry.session.euicc_cert().ok();
     entry.order_id = Some(order.id);
     drop(guard);
 
@@ -216,17 +220,10 @@ pub async fn authenticate_client(
 
     // Remember which eUICC this went to. A notification arrives with no
     // session and no EID, so this row is the only way to know whose
-    // signature to check later.
-    //
-    // What is stored as the certificate is the whole
-    // AuthenticateServerResponse, which contains CERT.EUICC.ECDSA:
-    // euicc-rsp learns the public key but hands no certificate back, so
-    // there is nothing better to store yet. A later change there should
-    // return the certificate itself, and this should follow it.
-    if let Some(eid) = eid {
-        let _ = st
-            .store
-            .bind_euicc(order.id, &eid, &req.authenticate_server_response);
+    // signature to check later -- a ProfileInstallationResult carries no
+    // certificate of its own.
+    if let (Some(eid), Some(cert)) = (eid, cert) {
+        let _ = st.store.bind_euicc(order.id, &eid, &cert);
     }
     let _ = st.store.set_state(order.id, OrderState::Bound);
 
@@ -289,4 +286,61 @@ pub async fn get_bound_profile_package(
         let _ = st.store.set_state(id, OrderState::Downloaded);
     }
     ok_json(body)
+}
+
+/// SGP.22 v2.6 Table 57 gives HandleNotification the Notification MEP,
+/// not the synchronous one every other endpoint here uses. Section 6.3
+/// is explicit about what that means: 204, with an empty body. There is
+/// no functionExecutionStatus to put a verdict in, and no way to tell
+/// the LPA anything at all -- which is correct. An LPA has no key to
+/// verify with and nothing to do with the answer; it delivers, and on
+/// 204 it removes the notification from the card.
+///
+/// So a notification this server cannot verify still gets a 204. The
+/// alternative is worse: refusing would leave the notification on the
+/// eUICC forever, filling a queue that SGP.22 section 3.5 has the card
+/// start refusing profile management over. What a rejection does is
+/// leave nothing in the store, and that absence is the record.
+pub async fn handle_notification(
+    State(st): State<Arc<AppState>>,
+    Json(req): Json<HandleNotificationRequest>,
+) -> Response {
+    // A notification carries no EID and no transactionId, so the only
+    // way to know whose signature to check is the ICCID -- and the
+    // certificate this server kept when that ICCID was downloaded.
+    // Reading it proves nothing and is not treated as if it did: it only
+    // decides which certificate the real question gets asked with.
+    let iccid = notification_metadata(&req.pending_notification)
+        .ok()
+        .and_then(|n| n.iccid);
+
+    let order = iccid.and_then(|i| st.store.order_by_iccid(&i).ok().flatten());
+    let cert = order.as_ref().and_then(|o| o.euicc_cert.clone());
+
+    let verified = verify_notification(cert.as_deref(), &req.pending_notification).ok();
+
+    if let Some(v) = verified {
+        let _ = st.store.record_notification(NewNotification {
+            order_id: order.as_ref().map(|o| o.id),
+            seq_number: v.seq_number,
+            operation: v.operation,
+            iccid: v.iccid,
+            installed: v.is_installation_result.then_some(v.installed),
+            raw: req.pending_notification.clone(),
+        });
+        if let (Some(o), true) = (order.as_ref(), v.is_installation_result) {
+            let _ = st.store.set_state(
+                o.id,
+                if v.installed {
+                    OrderState::Downloaded
+                } else {
+                    OrderState::Failed
+                },
+            );
+        }
+    }
+
+    let mut h = HeaderMap::new();
+    h.insert("X-Admin-Protocol", HeaderValue::from_static(ADMIN_PROTOCOL));
+    (StatusCode::NO_CONTENT, h).into_response()
 }

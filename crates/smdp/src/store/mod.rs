@@ -96,6 +96,40 @@ pub trait Store: Send + Sync {
     /// HandleNotification stands on.
     fn bind_euicc(&self, order: i64, eid: &str, euicc_cert: &[u8]) -> Result<(), StoreError>;
     fn set_state(&self, order: i64, state: OrderState) -> Result<(), StoreError>;
+
+    /// Keep a notification that was delivered and verified.
+    ///
+    /// The bytes are kept as they arrived: the eUICC signed over them,
+    /// and a re-encoding would be a different message. Storing them at
+    /// all is what makes a delivery auditable after the fact -- without
+    /// it, "the Profile was installed" is a row somebody changed rather
+    /// than something the eUICC said.
+    fn record_notification(&self, n: NewNotification) -> Result<(), StoreError>;
+
+    fn notifications(&self) -> Result<Vec<StoredNotification>, StoreError>;
+}
+
+#[derive(Debug, Clone)]
+pub struct NewNotification {
+    /// Which order it was matched to, by ICCID. None when no order
+    /// carries that ICCID -- the notification is still genuine and
+    /// still worth keeping.
+    pub order_id: Option<i64>,
+    pub seq_number: i64,
+    pub operation: i32,
+    pub iccid: Option<[u8; 10]>,
+    pub installed: Option<bool>,
+    pub raw: Vec<u8>,
+}
+
+#[derive(Debug, Clone)]
+pub struct StoredNotification {
+    pub id: i64,
+    pub order_id: Option<i64>,
+    pub seq_number: i64,
+    pub operation: i32,
+    pub installed: Option<bool>,
+    pub raw: Vec<u8>,
 }
 
 #[cfg(test)]

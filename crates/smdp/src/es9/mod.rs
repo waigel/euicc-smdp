@@ -168,6 +168,13 @@ pub struct GetBoundProfilePackageResponse {
     pub bound_profile_package: Vec<u8>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HandleNotificationRequest {
+    #[serde(with = "wire::b64_field")]
+    pub pending_notification: Vec<u8>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::wire::*;
