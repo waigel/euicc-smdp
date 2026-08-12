@@ -258,3 +258,82 @@ async fn the_response_carries_the_admin_protocol_header() {
         "gsma/rsp/v2.6.0"
     );
 }
+
+#[tokio::test]
+async fn a_half_finished_download_can_be_retried() {
+    // AuthenticateClient marks an order Bound. If only Available orders
+    // were offered, any failure after that step stranded the order for
+    // good -- which is precisely what happens while bringing a card up,
+    // and it happened on the first real card this project ever reached.
+    let store = seeded();
+    let o = store.order_by_matching_id("MATCH-1").unwrap().unwrap();
+    store.set_state(o.id, OrderState::Bound).unwrap();
+
+    let addr = spawn(store.clone()).await;
+    let c = reqwest::Client::new();
+
+    let (_, r) = call(
+        &c,
+        &addr,
+        "initiateAuthentication",
+        json!({
+            "euiccChallenge": b64(&fixture("euicc-challenge.bin")),
+            "euiccInfo1": b64(&fixture("euicc-info1.der")),
+            "smdpAddress": ADDR,
+        }),
+    )
+    .await;
+    let tid = r["transactionId"].as_str().unwrap().to_string();
+
+    let (_, r) = call(
+        &c,
+        &addr,
+        "authenticateClient",
+        json!({
+            "transactionId": tid,
+            "authenticateServerResponse": b64(&fixture("auth-server-response.der")),
+        }),
+    )
+    .await;
+    assert_eq!(
+        r["header"]["functionExecutionStatus"]["status"], "Executed-Success",
+        "a Bound order must still be offered: {r}"
+    );
+}
+
+#[tokio::test]
+async fn a_downloaded_order_is_not_offered_again() {
+    let store = seeded();
+    let o = store.order_by_matching_id("MATCH-1").unwrap().unwrap();
+    store.set_state(o.id, OrderState::Downloaded).unwrap();
+
+    let addr = spawn(store).await;
+    let c = reqwest::Client::new();
+    let (_, r) = call(
+        &c,
+        &addr,
+        "initiateAuthentication",
+        json!({
+            "euiccChallenge": b64(&fixture("euicc-challenge.bin")),
+            "euiccInfo1": b64(&fixture("euicc-info1.der")),
+            "smdpAddress": ADDR,
+        }),
+    )
+    .await;
+    let tid = r["transactionId"].as_str().unwrap().to_string();
+
+    let (_, r) = call(
+        &c,
+        &addr,
+        "authenticateClient",
+        json!({
+            "transactionId": tid,
+            "authenticateServerResponse": b64(&fixture("auth-server-response.der")),
+        }),
+    )
+    .await;
+    assert_eq!(
+        r["header"]["functionExecutionStatus"]["status"], "Failed",
+        "a Profile already handed out must not be handed out again: {r}"
+    );
+}

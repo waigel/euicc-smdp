@@ -141,16 +141,33 @@ pub async fn authenticate_client(
     // more than one order available there is genuinely no way to tell
     // which is wanted. Refusing is honest; guessing would hand out the
     // wrong Profile. Parsing ctxParams1 is what replaces this.
+    // Available *or* Bound. Bound only means an eUICC authenticated
+    // against this order once; if the download did not finish, the
+    // Profile is still here and still wanted. Filtering to Available
+    // alone stranded an order permanently the first time any step after
+    // AuthenticateClient failed -- which is exactly what happens while
+    // bringing a card up. Downloaded and Failed are not offered: the
+    // first has been handed out, and the second was refused by the
+    // eUICC itself.
     let available: Vec<_> = match st.store.list_orders() {
         Ok(o) => o
             .into_iter()
-            .filter(|o| o.state == OrderState::Available)
+            .filter(|o| {
+                o.state == OrderState::Available || o.state == OrderState::Bound
+            })
             .collect(),
         Err(e) => return failed(code::PROFILE, code::EXECUTION, &e.to_string()),
     };
     let order = match available.len() {
         1 => available.into_iter().next().unwrap(),
-        0 => return failed(code::PROFILE, code::UNKNOWN, "no order is available"),
+        0 => {
+            return failed(
+                code::PROFILE,
+                code::UNKNOWN,
+                "no order is available -- add one, or reset one that has \
+                 already been downloaded (smdp order list shows their state)",
+            )
+        }
         n => {
             return failed(
                 code::PROFILE,

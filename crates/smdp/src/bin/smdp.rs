@@ -12,6 +12,7 @@ use clap::{Parser, Subcommand};
 use smdp::server::{router, ServerConfig};
 use smdp::service;
 use smdp::store::sqlite::SqliteStore;
+use smdp::store::Store;
 
 #[derive(Parser)]
 #[command(name = "smdp", about = "The SM-DP+ of SGP.22", version)]
@@ -81,6 +82,17 @@ enum OrderCommand {
     List {
         #[arg(long, default_value = "smdp.db")]
         db: PathBuf,
+    },
+    /// Offer an order again after it was downloaded or refused.
+    ///
+    /// A Bound order is retried without this -- an unfinished download
+    /// leaves the Profile here and still wanted. This is for the other
+    /// two: one already handed out, or one the eUICC itself refused.
+    Reset {
+        #[arg(long, default_value = "smdp.db")]
+        db: PathBuf,
+        /// Which order, as `order list` numbers them.
+        id: i64,
     },
 }
 
@@ -178,6 +190,18 @@ fn run() -> Result<(), String> {
             if let Some(h) = host {
                 println!("  activation  {}", service::activation_code(&h, &order.matching_id));
             }
+            Ok(())
+        }
+        Command::Order(OrderCommand::Reset { db, id }) => {
+            let store = SqliteStore::open(&db).map_err(|e| e.to_string())?;
+            let known = service::list_orders(&store).map_err(|e| e.to_string())?;
+            if !known.iter().any(|o| o.id == id) {
+                return Err(format!("no order {id}"));
+            }
+            store
+                .set_state(id, smdp::store::OrderState::Available)
+                .map_err(|e| e.to_string())?;
+            println!("order {id} is available again");
             Ok(())
         }
         Command::Order(OrderCommand::List { db }) => {
