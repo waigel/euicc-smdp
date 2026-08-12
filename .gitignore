@@ -1,1 +1,8 @@
 /target
+
+# Runtime state, not source. `smdp serve --db` writes here by default,
+# and an order database with somebody's test Profile in it has no
+# business in a repository.
+/smdp.db
+*.db
+*.db-journal

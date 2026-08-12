@@ -98,12 +98,20 @@ enum OrderCommand {
 
 fn parse_iccid(s: &str) -> Result<[u8; 10], String> {
     if s.len() != 20 {
-        return Err(format!("an ICCID is 20 hexadecimal digits, this is {}", s.len()));
+        return Err(format!(
+            "an ICCID is 20 hexadecimal digits, this is {}",
+            s.len()
+        ));
     }
     let mut out = [0u8; 10];
     for (i, b) in out.iter_mut().enumerate() {
-        *b = u8::from_str_radix(&s[i * 2..i * 2 + 2], 16)
-            .map_err(|_| format!("not hexadecimal at digit {}: {:?}", i * 2 + 1, &s[i * 2..i * 2 + 2]))?;
+        *b = u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).map_err(|_| {
+            format!(
+                "not hexadecimal at digit {}: {:?}",
+                i * 2 + 1,
+                &s[i * 2..i * 2 + 2]
+            )
+        })?;
     }
     Ok(out)
 }
@@ -160,12 +168,7 @@ fn run() -> Result<(), String> {
             server_address,
             tls_cert,
             tls_key,
-        } => serve(
-            db,
-            addr,
-            server_address,
-            tls_cert.zip(tls_key),
-        ),
+        } => serve(db, addr, server_address, tls_cert.zip(tls_key)),
         Command::Order(OrderCommand::Add {
             db,
             upp,
@@ -188,7 +191,10 @@ fn run() -> Result<(), String> {
             println!("  iccid       {}", hex(&order.iccid));
             println!("  matchingId  {}", order.matching_id);
             if let Some(h) = host {
-                println!("  activation  {}", service::activation_code(&h, &order.matching_id));
+                println!(
+                    "  activation  {}",
+                    service::activation_code(&h, &order.matching_id)
+                );
             }
             Ok(())
         }

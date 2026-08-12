@@ -1,0 +1,69 @@
+# Everything here runs without a card reader. The whole SM-DP+ session is
+# driven against bytes euicc-rsp recorded once, so a plain runner proves
+# as much as a desk with hardware on it.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      # crates/rsp-sys/build.rs drives euicc-rsp's own Makefile, so this
+      # build needs what that repository needs -- including an asn1c new
+      # enough to have -D (destination directory). Ubuntu packages
+      # 0.9.28, which does not; -D arrived in v0.9.29 (vlm/asn1c commit
+      # 6431b1c9). Built into a runner-temp directory and passed by path,
+      # never installed system-wide, exactly as euicc-rsp's own pipeline
+      # does it.
+      - name: cache asn1c v0.9.29 build
+        id: asn1c-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/asn1c-src
+          key: asn1c-v0.9.29-${{ runner.os }}
+
+      - name: build asn1c v0.9.29 (Ubuntu ships 0.9.28, which lacks -D)
+        if: steps.asn1c-cache.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq autoconf automake libtool bison flex
+          git clone --quiet --branch v0.9.29 --depth 1 \
+              https://github.com/vlm/asn1c.git "$RUNNER_TEMP/asn1c-src"
+          cd "$RUNNER_TEMP/asn1c-src"
+          autoreconf -iv
+          ./configure
+          make -j"$(nproc)"
+
+      # bindgen needs libclang to read include/rsp.h.
+      - name: install libclang for bindgen
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libclang-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      # --tests, not a bare `cargo test`: this workspace has no doc-tests
+      # worth running, and rustdoc has nothing to add to what the
+      # integration tests already prove.
+      - name: build and test
+        env:
+          ASN1C: ${{ runner.temp }}/asn1c-src/asn1c/asn1c
+          SKELDIR: ${{ runner.temp }}/asn1c-src/skeletons
+        run: cargo test --tests --workspace
+
+      - name: check formatting
+        run: cargo fmt --all -- --check
+
+      - name: clippy
+        run: cargo clippy --workspace --tests -- -D warnings

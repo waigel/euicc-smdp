@@ -116,8 +116,7 @@ async fn the_recorded_session_downloads_through_the_server() {
     .await;
     assert_eq!(status, 200);
     assert_eq!(
-        r["header"]["functionExecutionStatus"]["status"],
-        "Executed-Success",
+        r["header"]["functionExecutionStatus"]["status"], "Executed-Success",
         "{r}"
     );
     let tid = r["transactionId"].as_str().unwrap().to_string();
@@ -138,8 +137,7 @@ async fn the_recorded_session_downloads_through_the_server() {
     .await;
     assert_eq!(status, 200);
     assert_eq!(
-        r["header"]["functionExecutionStatus"]["status"],
-        "Executed-Success",
+        r["header"]["functionExecutionStatus"]["status"], "Executed-Success",
         "{r}"
     );
 
@@ -156,8 +154,7 @@ async fn the_recorded_session_downloads_through_the_server() {
     .await;
     assert_eq!(status, 200);
     assert_eq!(
-        r["header"]["functionExecutionStatus"]["status"],
-        "Executed-Success",
+        r["header"]["functionExecutionStatus"]["status"], "Executed-Success",
         "{r}"
     );
     let bpp = b64_decode(r["boundProfilePackage"].as_str().unwrap());
@@ -244,7 +241,9 @@ async fn the_response_carries_the_admin_protocol_header() {
     // Section 6.2 requires it on the response as well as the request.
     let addr = spawn(seeded()).await;
     let r = reqwest::Client::new()
-        .post(format!("http://{addr}/gsma/rsp2/es9plus/initiateAuthentication"))
+        .post(format!(
+            "http://{addr}/gsma/rsp2/es9plus/initiateAuthentication"
+        ))
         .json(&json!({
             "euiccChallenge": b64(&fixture("euicc-challenge.bin")),
             "euiccInfo1": b64(&fixture("euicc-info1.der")),

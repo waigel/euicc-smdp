@@ -168,9 +168,8 @@ impl DpSession {
         const WHAT: &str = "session EID";
         let mut buf = [0u8; 64];
         let mut len: usize = 0;
-        let rc = unsafe {
-            rsp_sys::rsp_dp_session_eid(self.raw, buf.as_mut_ptr(), buf.len(), &mut len)
-        };
+        let rc =
+            unsafe { rsp_sys::rsp_dp_session_eid(self.raw, buf.as_mut_ptr(), buf.len(), &mut len) };
         if rc != 0 {
             return Err(RspError::from_code(rc, WHAT));
         }
@@ -208,8 +207,7 @@ pub struct AuthenticateFields<'a> {
 pub fn initiate_fields(resp: &[u8]) -> Result<InitiateFields<'_>> {
     const WHAT: &str = "InitiateAuthentication fields";
     let mut f = std::mem::MaybeUninit::<rsp_sys::rsp_dp_initiate_fields_t>::zeroed();
-    let rc =
-        unsafe { rsp_sys::rsp_dp_initiate_fields(resp.as_ptr(), resp.len(), f.as_mut_ptr()) };
+    let rc = unsafe { rsp_sys::rsp_dp_initiate_fields(resp.as_ptr(), resp.len(), f.as_mut_ptr()) };
     if rc != 0 {
         return Err(RspError::from_code(rc, WHAT));
     }

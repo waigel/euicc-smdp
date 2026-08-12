@@ -124,8 +124,16 @@ fn the_whole_session_runs_and_yields_a_bound_profile_package() {
     );
 
     let g = smdp::rsp::authenticate_fields(ac.as_slice()).expect("fields slice out");
-    assert_eq!(&g.profile_metadata[..2], &[0xbf, 0x25], "profileMetaData is [37]");
-    assert_eq!(g.smdp_signature2.len(), 67, "'5F 37 40' and 64 of signature");
+    assert_eq!(
+        &g.profile_metadata[..2],
+        &[0xbf, 0x25],
+        "profileMetaData is [37]"
+    );
+    assert_eq!(
+        g.smdp_signature2.len(),
+        67,
+        "'5F 37 40' and 64 of signature"
+    );
 
     let eid = s.eid().expect("the session learned an EID");
     assert!(
