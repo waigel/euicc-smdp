@@ -112,7 +112,11 @@ pub struct InitiateAuthenticationResponse {
     pub server_signed1: Vec<u8>,
     #[serde(with = "wire::b64_field")]
     pub server_signature1: Vec<u8>,
-    #[serde(with = "wire::b64_field")]
+    /// Spelled out rather than left to rename_all: the specification
+    /// writes this one `euiccCiPKIdToBeUsed`, and camelCase of the Rust
+    /// name produces `euiccCiPkidToBeUsed`, which no LPA looks for. The
+    /// acronym is the whole difference and it is invisible at a glance.
+    #[serde(rename = "euiccCiPKIdToBeUsed", with = "wire::b64_field")]
     pub euicc_ci_pkid_to_be_used: Vec<u8>,
     #[serde(with = "wire::b64_field")]
     pub server_certificate: Vec<u8>,
@@ -178,6 +182,30 @@ mod tests {
         let v: serde_json::Value = serde_json::to_value(&req).unwrap();
         assert_eq!(v["transactionId"], "01ABFF");
         assert_eq!(v["prepareDownloadResponse"], "MAA=");
+    }
+
+    #[test]
+    fn the_ci_key_id_keeps_the_specification_s_own_spelling() {
+        // SGP.22 v2.6 section 6.5.2.6 writes euiccCiPKIdToBeUsed.
+        // rename_all = "camelCase" turns the Rust name into
+        // euiccCiPkidToBeUsed, which is a different field as far as any
+        // LPA is concerned -- and it looks right until one reads it
+        // letter by letter. euicc-tools' client found this by failing.
+        let body = InitiateAuthenticationResponse {
+            header: ResponseHeader::success(),
+            transaction_id: vec![0x01],
+            server_signed1: vec![0x30],
+            server_signature1: vec![0x30],
+            euicc_ci_pkid_to_be_used: vec![0x04],
+            server_certificate: vec![0x30],
+        };
+        let v: serde_json::Value = serde_json::to_value(&body).unwrap();
+        assert!(
+            v.get("euiccCiPKIdToBeUsed").is_some(),
+            "the field the specification names is missing; keys are {:?}",
+            v.as_object().unwrap().keys().collect::<Vec<_>>()
+        );
+        assert!(v.get("euiccCiPkidToBeUsed").is_none(), "the mangled spelling survived");
     }
 
     #[test]
