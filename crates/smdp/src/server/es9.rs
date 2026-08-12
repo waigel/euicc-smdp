@@ -319,16 +319,28 @@ pub async fn handle_notification(
 
     let verified = verify_notification(cert.as_deref(), &req.pending_notification).ok();
 
-    if let Some(v) = verified {
+    // Everything that arrives is kept, verified or not. 204 is the only
+    // answer the Notification MEP has, so by the time this runs the LPA
+    // has already removed it from the eUICC -- which keeps no second
+    // copy. Discarding an unverified one would destroy the only copy in
+    // existence, and an earlier version of this handler did exactly
+    // that: five real notifications from a real card, gone.
+    let meta = notification_metadata(&req.pending_notification).ok();
+    if let Some(m) = verified.or(meta) {
         let _ = st.store.record_notification(NewNotification {
+            verified: verified.is_some(),
             order_id: order.as_ref().map(|o| o.id),
-            seq_number: v.seq_number,
-            operation: v.operation,
-            iccid: v.iccid,
-            installed: v.is_installation_result.then_some(v.installed),
+            seq_number: m.seq_number,
+            operation: m.operation,
+            iccid: m.iccid,
+            installed: (verified.is_some() && m.is_installation_result).then_some(m.installed),
             raw: req.pending_notification.clone(),
         });
-        if let (Some(o), true) = (order.as_ref(), v.is_installation_result) {
+    }
+    // Only a verified notification moves an order. An unverified one is
+    // a stranger's claim about somebody else's Profile.
+    if let (Some(v), Some(o)) = (verified, order.as_ref()) {
+        if v.is_installation_result {
             let _ = st.store.set_state(
                 o.id,
                 if v.installed {

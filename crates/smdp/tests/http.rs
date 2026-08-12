@@ -413,11 +413,13 @@ async fn a_notification_is_taken_verified_and_kept() {
 }
 
 #[tokio::test]
-async fn a_notification_that_does_not_verify_is_still_answered_but_not_kept() {
-    // Refusing would leave it on the eUICC forever, filling a queue that
-    // SGP.22 section 3.5 has the card start refusing profile management
-    // over. What a rejection does is leave nothing in the store, and
-    // that absence is the record.
+async fn a_notification_that_does_not_verify_is_kept_anyway_and_marked() {
+    // The Notification MEP has no way to tell an LPA anything: 204 is
+    // the only answer. So by the time this server decides, the LPA has
+    // already removed the notification from the eUICC, which keeps no
+    // second copy. Discarding an unverified one destroys the only copy
+    // that exists -- which is what an earlier version did, to five real
+    // notifications from a real card.
     let store = seeded();
     let addr = spawn(store.clone()).await;
 
@@ -434,8 +436,15 @@ async fn a_notification_that_does_not_verify_is_still_answered_but_not_kept() {
         .await
         .unwrap();
     assert_eq!(resp.status(), 204, "an LPA is told nothing either way");
-    assert!(
-        store.notifications().unwrap().is_empty(),
-        "but nothing unverified is kept"
-    );
+
+    let kept = store.notifications().unwrap();
+    assert_eq!(kept.len(), 1, "it is kept: nothing else has a copy");
+    assert!(!kept[0].verified, "and marked as not having verified");
+    assert_eq!(kept[0].installed, None, "with no verdict taken from it");
+    assert_eq!(kept[0].raw, tampered, "kept exactly as it arrived");
+
+    // An unverified notification is a stranger's claim about somebody
+    // else's Profile, so it must not move the order.
+    let o = store.order_by_matching_id("MATCH-1").unwrap().unwrap();
+    assert_eq!(o.state, OrderState::Available, "the order is untouched");
 }
