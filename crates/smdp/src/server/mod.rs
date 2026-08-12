@@ -94,5 +94,9 @@ pub fn router(store: Arc<dyn Store>, config: ServerConfig) -> Router {
             "/gsma/rsp2/es9plus/getBoundProfilePackage",
             post(es9::get_bound_profile_package),
         )
+        .route(
+            "/gsma/rsp2/es9plus/handleNotification",
+            post(es9::handle_notification),
+        )
         .with_state(state)
 }

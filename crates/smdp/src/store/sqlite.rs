@@ -8,7 +8,7 @@ use std::sync::Mutex;
 
 use rusqlite::{params, Connection, OptionalExtension};
 
-use super::{NewOrder, Order, OrderState, Store, StoreError};
+use super::{NewNotification, NewOrder, Order, OrderState, Store, StoreError, StoredNotification};
 
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS orders (
@@ -22,6 +22,16 @@ CREATE TABLE IF NOT EXISTS orders (
     euicc_cert   BLOB
 );
 CREATE INDEX IF NOT EXISTS orders_by_iccid ON orders(iccid);
+
+CREATE TABLE IF NOT EXISTS notifications (
+    id         INTEGER PRIMARY KEY,
+    order_id   INTEGER,
+    seq_number INTEGER NOT NULL,
+    operation  INTEGER NOT NULL,
+    iccid      BLOB,
+    installed  INTEGER,
+    raw        BLOB NOT NULL
+);
 ";
 
 /// rusqlite's Connection is Send but not Sync, and Store is both, so the
@@ -158,6 +168,52 @@ impl Store for SqliteStore {
         )
         .map_err(StoreError::Db)?;
         Ok(())
+    }
+
+    fn record_notification(&self, n: NewNotification) -> Result<(), StoreError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO notifications
+                 (order_id, seq_number, operation, iccid, installed, raw)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                n.order_id,
+                n.seq_number,
+                n.operation,
+                n.iccid.map(|i| i.to_vec()),
+                n.installed.map(|b| b as i64),
+                n.raw
+            ],
+        )
+        .map_err(StoreError::Db)?;
+        Ok(())
+    }
+
+    fn notifications(&self) -> Result<Vec<StoredNotification>, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, order_id, seq_number, operation, installed, raw
+                 FROM notifications ORDER BY id",
+            )
+            .map_err(StoreError::Db)?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok(StoredNotification {
+                    id: r.get(0)?,
+                    order_id: r.get(1)?,
+                    seq_number: r.get(2)?,
+                    operation: r.get(3)?,
+                    installed: r.get::<_, Option<i64>>(4)?.map(|v| v != 0),
+                    raw: r.get(5)?,
+                })
+            })
+            .map_err(StoreError::Db)?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r.map_err(StoreError::Db)?);
+        }
+        Ok(out)
     }
 
     fn set_state(&self, order: i64, state: OrderState) -> Result<(), StoreError> {
