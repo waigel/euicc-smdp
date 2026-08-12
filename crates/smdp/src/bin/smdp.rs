@@ -64,9 +64,12 @@ enum OrderCommand {
         /// one to testdata/session/store-metadata.der.
         #[arg(long)]
         metadata: PathBuf,
-        /// The ICCID, 20 hexadecimal digits.
+        /// The ICCID, 20 hexadecimal digits. Optional: it is already in
+        /// the metadata, and read from there unless given. Stating it
+        /// twice is how the two end up disagreeing, which the eUICC only
+        /// notices at the very end of an install.
         #[arg(long)]
-        iccid: String,
+        iccid: Option<String>,
         /// Use this MatchingID instead of a generated one.
         #[arg(long)]
         matching_id: Option<String>,
@@ -159,10 +162,13 @@ fn run() -> Result<(), String> {
             matching_id,
             host,
         }) => {
-            let iccid = parse_iccid(&iccid)?;
             let upp = std::fs::read(&upp).map_err(|e| format!("{}: {e}", upp.display()))?;
             let metadata =
                 std::fs::read(&metadata).map_err(|e| format!("{}: {e}", metadata.display()))?;
+            let iccid = match iccid {
+                Some(h) => parse_iccid(&h)?,
+                None => service::iccid_from_metadata(&metadata).map_err(|e| e.to_string())?,
+            };
             let store = SqliteStore::open(&db).map_err(|e| e.to_string())?;
             let order = service::create_order(&store, &iccid, upp, metadata, matching_id)
                 .map_err(|e| e.to_string())?;
