@@ -81,25 +81,26 @@ it is not found, point `LIBCLANG_PATH` at
 
 ## A constraint worth knowing
 
-`euicc-rsp` is not thread-safe, so this crate serializes every call into
-it behind one process-wide lock — at the boundary rather than in the
-server, so a second consumer cannot forget.
-`crates/smdp/tests/session.rs` pins it: remove the lock and that test
-segfaults.
+`euicc-rsp` cannot yet be called from more than one thread at once, so
+this crate serializes every call into it behind one process-wide lock —
+at the boundary rather than in the server, so a second consumer cannot
+forget. `crates/smdp/tests/session.rs` pins it: remove the lock and that
+test crashes in five runs out of twelve.
 
-The cause is `euicc-rsp`'s `src/rsp_sign.c`, which builds its RNG as an
-unsynchronised lazy singleton; one thread's `mbedtls_ctr_drbg_init`
-memsets the context another is already seeding, leaving a NULL entropy
-callback. A second race follows it, when the shared DRBG reseeds during
-signing and frees memory on the shared entropy context.
+Two causes were found by backtrace, and one is fixed. `euicc-rsp` kept
+its signing RNG in an unsynchronised lazy singleton, so one thread's
+initialisation would memset a context another was already seeding; that
+is gone, and signing is now genuinely parallel there. What remains is
+inside mbedTLS itself — the crash now lands in its entropy accumulator
+with a NULL context, reached from separate per-call contexts, so the
+shared state is mbedTLS's own.
 
-Enabling `MBEDTLS_THREADING_C` in the vendored mbedTLS does **not** fix
-this alone — it adds deadlocks, because the per-context mutex is created
-by the same `init` call that races. Both a real once-init in
-`rsp_sign.c` and `MBEDTLS_THREADING_C` are needed; with both, 12 of 12
-runs were clean at 24 000 concurrent signatures. Until that lands
-upstream, the lock stays and cryptographic work does not run in
-parallel.
+`MBEDTLS_THREADING_C` is what would cover that, and it is still off in
+the vendored copy. Turning it on adds mutex members to mbedTLS contexts,
+so every consumer of that copy — `euicc-lpa` and `euicc-tools` included
+— would have to be built against the same configuration or the struct
+layouts disagree. That is a deliberate change across three repositories,
+not a flag flip, and until it happens the lock stays.
 
 ## License
 
