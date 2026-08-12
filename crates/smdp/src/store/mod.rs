@@ -97,13 +97,21 @@ pub trait Store: Send + Sync {
     fn bind_euicc(&self, order: i64, eid: &str, euicc_cert: &[u8]) -> Result<(), StoreError>;
     fn set_state(&self, order: i64, state: OrderState) -> Result<(), StoreError>;
 
-    /// Keep a notification that was delivered and verified.
+    /// Keep a notification that was delivered, whether or not it
+    /// verified.
+    ///
+    /// Everything that arrives is kept. The Notification MEP has no way
+    /// to tell an LPA that a notification was not accepted -- 204 is the
+    /// only answer there is -- so by the time this runs the LPA has
+    /// already removed it from the eUICC, which keeps no second copy.
+    /// Discarding it here would destroy the only copy that exists, and
+    /// an earlier version of this server did exactly that: five real
+    /// notifications from a real card, gone, with nothing to look at
+    /// afterwards.
     ///
     /// The bytes are kept as they arrived: the eUICC signed over them,
-    /// and a re-encoding would be a different message. Storing them at
-    /// all is what makes a delivery auditable after the fact -- without
-    /// it, "the Profile was installed" is a row somebody changed rather
-    /// than something the eUICC said.
+    /// and a re-encoding would be a different message. `verified` says
+    /// whether that signature was checked and held.
     fn record_notification(&self, n: NewNotification) -> Result<(), StoreError>;
 
     fn notifications(&self) -> Result<Vec<StoredNotification>, StoreError>;
@@ -111,6 +119,10 @@ pub trait Store: Send + Sync {
 
 #[derive(Debug, Clone)]
 pub struct NewNotification {
+    /// Did it verify? A notification that did not is still kept: the
+    /// LPA has already removed it from the eUICC by the time this is
+    /// written, so not keeping it destroys the only copy.
+    pub verified: bool,
     /// Which order it was matched to, by ICCID. None when no order
     /// carries that ICCID -- the notification is still genuine and
     /// still worth keeping.
@@ -125,6 +137,7 @@ pub struct NewNotification {
 #[derive(Debug, Clone)]
 pub struct StoredNotification {
     pub id: i64,
+    pub verified: bool,
     pub order_id: Option<i64>,
     pub seq_number: i64,
     pub operation: i32,

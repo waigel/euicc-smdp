@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS notifications (
     operation  INTEGER NOT NULL,
     iccid      BLOB,
     installed  INTEGER,
+    verified   INTEGER NOT NULL,
     raw        BLOB NOT NULL
 );
 ";
@@ -174,14 +175,15 @@ impl Store for SqliteStore {
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "INSERT INTO notifications
-                 (order_id, seq_number, operation, iccid, installed, raw)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                 (order_id, seq_number, operation, iccid, installed, verified, raw)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
                 n.order_id,
                 n.seq_number,
                 n.operation,
                 n.iccid.map(|i| i.to_vec()),
                 n.installed.map(|b| b as i64),
+                n.verified as i64,
                 n.raw
             ],
         )
@@ -193,7 +195,7 @@ impl Store for SqliteStore {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn
             .prepare(
-                "SELECT id, order_id, seq_number, operation, installed, raw
+                "SELECT id, order_id, seq_number, operation, installed, verified, raw
                  FROM notifications ORDER BY id",
             )
             .map_err(StoreError::Db)?;
@@ -205,7 +207,8 @@ impl Store for SqliteStore {
                     seq_number: r.get(2)?,
                     operation: r.get(3)?,
                     installed: r.get::<_, Option<i64>>(4)?.map(|v| v != 0),
-                    raw: r.get(5)?,
+                    verified: r.get::<_, i64>(5)? != 0,
+                    raw: r.get(6)?,
                 })
             })
             .map_err(StoreError::Db)?;
