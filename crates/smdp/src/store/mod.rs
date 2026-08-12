@@ -69,6 +69,8 @@ pub enum StoreError {
     Db(rusqlite::Error),
     DuplicateMatchingId(String),
     UnknownState(String),
+    /// The database was written by a newer version of this server.
+    SchemaTooNew(i64),
     /// A stored ICCID that is not ten bytes -- the column is a BLOB, so
     /// nothing but this check keeps that honest.
     MalformedIccid(usize),
@@ -80,6 +82,12 @@ impl std::fmt::Display for StoreError {
             StoreError::Db(e) => write!(f, "database: {e}"),
             StoreError::DuplicateMatchingId(m) => write!(f, "MatchingID already exists: {m}"),
             StoreError::UnknownState(s) => write!(f, "unknown order state: {s}"),
+            StoreError::SchemaTooNew(v) => {
+                write!(
+                    f,
+                    "this database has schema version {v}; this server understands 2"
+                )
+            }
             StoreError::MalformedIccid(n) => write!(f, "stored ICCID is {n} bytes, expected 10"),
         }
     }
@@ -212,6 +220,68 @@ mod tests {
         assert_eq!(f.eid.as_deref(), Some("89049032123451234512345678901235"));
         assert_eq!(f.euicc_cert.as_deref(), Some(&[0x30, 0x82, 0x01][..]));
         assert_eq!(f.state, OrderState::Bound);
+    }
+
+    #[test]
+    fn an_older_database_migrates_rather_than_failing_at_the_first_insert() {
+        // CREATE TABLE IF NOT EXISTS leaves an older table exactly as it
+        // was and says nothing, so the code goes on believing in columns
+        // that are not there. A real database written before `verified`
+        // existed is rebuilt here to prove the migration runs and keeps
+        // what was in it.
+        let f = tempfile();
+        {
+            let c = rusqlite::Connection::open(&f).unwrap();
+            c.execute_batch(
+                "CREATE TABLE notifications (
+                     id         INTEGER PRIMARY KEY,
+                     order_id   INTEGER,
+                     seq_number INTEGER NOT NULL,
+                     operation  INTEGER NOT NULL,
+                     iccid      BLOB,
+                     installed  INTEGER,
+                     raw        BLOB NOT NULL);
+                 INSERT INTO notifications
+                     (seq_number, operation, installed, raw)
+                     VALUES (29, 0, 1, x'BF37');",
+            )
+            .unwrap();
+        }
+
+        let s = SqliteStore::open(&f).unwrap();
+        let kept = s.notifications().unwrap();
+        assert_eq!(kept.len(), 1, "the row survived the migration");
+        assert!(
+            kept[0].verified,
+            "and is marked verified: the version that wrote it stored nothing else"
+        );
+        assert_eq!(kept[0].seq_number, 29);
+
+        // And the new column is usable, which is what failed before.
+        s.record_notification(NewNotification {
+            verified: false,
+            order_id: None,
+            seq_number: 30,
+            operation: 1,
+            iccid: None,
+            installed: None,
+            raw: vec![0x30],
+        })
+        .unwrap();
+        assert_eq!(s.notifications().unwrap().len(), 2);
+        let _ = std::fs::remove_file(&f);
+    }
+
+    fn tempfile() -> std::path::PathBuf {
+        let mut p = std::env::temp_dir();
+        p.push(format!(
+            "smdp-migrate-{}.db",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        p
     }
 
     #[test]

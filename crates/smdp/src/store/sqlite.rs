@@ -35,6 +35,54 @@ CREATE TABLE IF NOT EXISTS notifications (
 );
 ";
 
+/// The version this code expects. Stored in SQLite's own
+/// `PRAGMA user_version`.
+const SCHEMA_VERSION: i64 = 2;
+
+/// Bring an existing database up to [`SCHEMA_VERSION`].
+///
+/// `CREATE TABLE IF NOT EXISTS` is not a migration: it leaves an older
+/// table exactly as it was and says nothing, so the code goes on
+/// believing in columns that are not there and fails at the first insert
+/// with "no such column". That is what a database written before
+/// `verified` existed did -- and it failed while a card was waiting.
+fn migrate(conn: &Connection) -> Result<(), StoreError> {
+    let version: i64 = conn
+        .query_row("PRAGMA user_version", [], |r| r.get(0))
+        .map_err(StoreError::Db)?;
+
+    if version == 0 {
+        // Either brand new, or written before versions were tracked. The
+        // two are told apart by whether the tables are there at all.
+        let existing: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master
+                 WHERE type = 'table' AND name = 'notifications'",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(StoreError::Db)?;
+        if existing == 0 {
+            conn.execute_batch(SCHEMA).map_err(StoreError::Db)?;
+        } else {
+            // Version 1: notifications without `verified`. Everything it
+            // holds did verify -- that version stored nothing else -- so
+            // its rows are backfilled as verified rather than as unknown.
+            conn.execute_batch(
+                "ALTER TABLE notifications
+                     ADD COLUMN verified INTEGER NOT NULL DEFAULT 1",
+            )
+            .map_err(StoreError::Db)?;
+        }
+    } else if version > SCHEMA_VERSION {
+        return Err(StoreError::SchemaTooNew(version));
+    }
+
+    conn.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION}"))
+        .map_err(StoreError::Db)?;
+    Ok(())
+}
+
 /// rusqlite's Connection is Send but not Sync, and Store is both, so the
 /// connection sits behind a Mutex. One process, one connection: this
 /// server keeps its RSP sessions in memory anyway, so it cannot be run
@@ -55,7 +103,7 @@ impl SqliteStore {
     }
 
     fn prepare(conn: Connection) -> Result<Self, StoreError> {
-        conn.execute_batch(SCHEMA).map_err(StoreError::Db)?;
+        migrate(&conn)?;
         Ok(SqliteStore {
             conn: Mutex::new(conn),
         })
