@@ -15,9 +15,12 @@ records for the same inputs. Not "the call succeeded" — the same bytes.
 No card is involved, and none is needed for that claim.
 
 ```sh
-smdp order add --db smdp.db --upp profile.der \
-  --metadata vendor/euicc-rsp/testdata/session/store-metadata.der \
-  --iccid 98001032547698103214 --host smdp.example.com
+# The metadata comes from euicc-tools, which reads the ICCID out of the
+# Profile itself -- and this reads it back out of the metadata, so it is
+# stated once and cannot disagree with what the eUICC will check.
+euicc metadata profile.der -o meta.der
+smdp order add --db smdp.db --upp profile.der --metadata meta.der \
+  --host smdp.example.com
 smdp serve --db smdp.db --addr 0.0.0.0:8443 --server-address smdp.example.com \
   --tls-cert cert.pem --tls-key key.pem
 ```
@@ -74,7 +77,8 @@ it is not found, point `LIBCLANG_PATH` at
   order and refuses, naming the reason, when more than one exists.
 - **Encoding a `StoreMetadataRequest`.** `order add` takes a pre-encoded
   one as a file rather than offering `--profile-name` flags it cannot
-  honour.
+  honour. `euicc metadata` in `euicc-tools` writes it, from the Profile
+  itself.
 - **A physical eUICC.** Every claim here is against recorded bytes. What
   turns "the tests pass" into "the card accepted it" is a client, and
   that lives in `euicc-tools`.
