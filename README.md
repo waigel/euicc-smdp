@@ -79,28 +79,24 @@ it is not found, point `LIBCLANG_PATH` at
   turns "the tests pass" into "the card accepted it" is a client, and
   that lives in `euicc-tools`.
 
-## A constraint worth knowing
+## Threads
 
-`euicc-rsp` cannot yet be called from more than one thread at once, so
-this crate serializes every call into it behind one process-wide lock —
-at the boundary rather than in the server, so a second consumer cannot
-forget. `crates/smdp/tests/session.rs` pins it: remove the lock and that
-test crashes in five runs out of twelve.
+There is no lock around the C library. There used to be, and removing it
+took two fixes in `euicc-rsp`, neither of which sufficed alone: its
+signing RNG was an unsynchronised lazy singleton, and its vendored
+mbedTLS was built without `MBEDTLS_THREADING_C`.
 
-Two causes were found by backtrace, and one is fixed. `euicc-rsp` kept
-its signing RNG in an unsynchronised lazy singleton, so one thread's
-initialisation would memset a context another was already seeding; that
-is gone, and signing is now genuinely parallel there. What remains is
-inside mbedTLS itself — the crash now lands in its entropy accumulator
-with a NULL context, reached from separate per-call contexts, so the
-shared state is mbedTLS's own.
+`crates/smdp/tests/session.rs` holds it — eight threads opening sessions
+concurrently, 20 runs with no crash, where the same test failed in five
+of twelve before.
 
-`MBEDTLS_THREADING_C` is what would cover that, and it is still off in
-the vendored copy. Turning it on adds mutex members to mbedTLS contexts,
-so every consumer of that copy — `euicc-lpa` and `euicc-tools` included
-— would have to be built against the same configuration or the struct
-layouts disagree. That is a deliberate change across three repositories,
-not a flag flip, and until it happens the lock stays.
+One trap is worth knowing if you build the chain by hand: mbedTLS's
+Makefile tracks source mtimes, not the flags it was given. Changing those
+flags leaves a stale archive beside freshly compiled objects, and since
+they add mutex members to mbedTLS contexts, the two disagree about struct
+sizes — silent memory corruption rather than a link error. `euicc-rsp`'s
+Makefile now deletes the objects whenever its stamp is out of date, so a
+plain `cargo test` is safe.
 
 ## License
 
