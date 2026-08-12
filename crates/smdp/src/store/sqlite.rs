@@ -75,7 +75,11 @@ fn row_to_order(row: &rusqlite::Row<'_>) -> rusqlite::Result<Result<Order, Store
 }
 
 impl SqliteStore {
-    fn one(&self, where_clause: &str, key: &dyn rusqlite::ToSql) -> Result<Option<Order>, StoreError> {
+    fn one(
+        &self,
+        where_clause: &str,
+        key: &dyn rusqlite::ToSql,
+    ) -> Result<Option<Order>, StoreError> {
         let conn = self.conn.lock().unwrap();
         let sql = format!("SELECT {COLUMNS} FROM orders WHERE {where_clause}");
         let found = conn

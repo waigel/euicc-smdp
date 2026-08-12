@@ -48,7 +48,9 @@ fn generate_matching_id() -> String {
     const ALPHABET: &[u8; 32] = b"ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
     let mut raw = [0u8; 22];
     getrandom::fill(&mut raw).expect("the OS CSPRNG is unavailable");
-    raw.iter().map(|b| ALPHABET[(b & 0x1f) as usize] as char).collect()
+    raw.iter()
+        .map(|b| ALPHABET[(b & 0x1f) as usize] as char)
+        .collect()
 }
 
 pub fn create_order(
@@ -142,8 +144,8 @@ mod tests {
         // What `euicc metadata` writes for its own test profile: BF25,
         // length, then 5A 0A and ten octets of EFiccid-ordered ICCID.
         let md = [
-            0xbf, 0x25, 0x27, 0x5a, 0x0a, 0x98, 0x00, 0x10, 0x32, 0x54, 0x76,
-            0x98, 0x10, 0x32, 0x14, 0x91, 0x0b,
+            0xbf, 0x25, 0x27, 0x5a, 0x0a, 0x98, 0x00, 0x10, 0x32, 0x54, 0x76, 0x98, 0x10, 0x32,
+            0x14, 0x91, 0x0b,
         ];
         assert_eq!(iccid_from_metadata(&md).unwrap(), ICCID);
     }

@@ -28,20 +28,26 @@ pub fn to_hex_upper(b: &[u8]) -> String {
 }
 
 pub fn from_hex(s: &str) -> Result<Vec<u8>, WireError> {
-    if s.len() % 2 != 0 {
+    if !s.len().is_multiple_of(2) {
         return Err(WireError::OddLength(s.len()));
     }
     let d = |c: char| -> Result<u8, WireError> {
         c.to_digit(16).map(|v| v as u8).ok_or(WireError::NotHex(c))
     };
     let cs: Vec<char> = s.chars().collect();
-    cs.chunks(2).map(|p| Ok((d(p[0])? << 4) | d(p[1])?)).collect()
+    cs.chunks(2)
+        .map(|p| Ok((d(p[0])? << 4) | d(p[1])?))
+        .collect()
 }
 
 /// serde adapter for the hexadecimal `transactionId`.
 pub mod hex_field {
     use super::*;
 
+    // &Vec<u8> rather than &[u8]: serde's `with` contract hands the
+    // field's own type by reference, and the field is a Vec. A slice
+    // would not compile here, whatever clippy's general advice.
+    #[allow(clippy::ptr_arg)]
     pub fn serialize<S: Serializer>(v: &Vec<u8>, s: S) -> Result<S::Ok, S::Error> {
         s.serialize_str(&to_hex_upper(v))
     }
@@ -57,6 +63,8 @@ pub mod b64_field {
     use super::*;
     use base64::{engine::general_purpose::STANDARD, Engine};
 
+    // See hex_field::serialize for why this is &Vec and not &[u8].
+    #[allow(clippy::ptr_arg)]
     pub fn serialize<S: Serializer>(v: &Vec<u8>, s: S) -> Result<S::Ok, S::Error> {
         s.serialize_str(&STANDARD.encode(v))
     }

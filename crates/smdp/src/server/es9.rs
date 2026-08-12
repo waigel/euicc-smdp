@@ -23,8 +23,8 @@ use axum::{
 
 use crate::es9::{
     AuthenticateClientRequest, AuthenticateClientResponse, FailureResponse,
-    GetBoundProfilePackageRequest, GetBoundProfilePackageResponse,
-    InitiateAuthenticationRequest, InitiateAuthenticationResponse, ResponseHeader, ADMIN_PROTOCOL,
+    GetBoundProfilePackageRequest, GetBoundProfilePackageResponse, InitiateAuthenticationRequest,
+    InitiateAuthenticationResponse, ResponseHeader, ADMIN_PROTOCOL,
 };
 use crate::rsp::{authenticate_fields, initiate_fields, DpSession, RspError};
 use crate::store::OrderState;
@@ -152,9 +152,7 @@ pub async fn authenticate_client(
     let available: Vec<_> = match st.store.list_orders() {
         Ok(o) => o
             .into_iter()
-            .filter(|o| {
-                o.state == OrderState::Available || o.state == OrderState::Bound
-            })
+            .filter(|o| o.state == OrderState::Available || o.state == OrderState::Bound)
             .collect(),
         Err(e) => return failed(code::PROFILE, code::EXECUTION, &e.to_string()),
     };

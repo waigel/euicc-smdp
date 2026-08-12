@@ -205,7 +205,10 @@ mod tests {
             "the field the specification names is missing; keys are {:?}",
             v.as_object().unwrap().keys().collect::<Vec<_>>()
         );
-        assert!(v.get("euiccCiPkidToBeUsed").is_none(), "the mangled spelling survived");
+        assert!(
+            v.get("euiccCiPkidToBeUsed").is_none(),
+            "the mangled spelling survived"
+        );
     }
 
     #[test]
@@ -247,7 +250,10 @@ mod tests {
         assert_eq!(to_hex_upper(&[0x0a, 0xf0]), "0AF0");
         assert_eq!(from_hex("0af0").unwrap(), vec![0x0a, 0xf0]);
         assert!(from_hex("zz").is_err());
-        assert!(from_hex("abc").is_err(), "an odd number of digits is not bytes");
+        assert!(
+            from_hex("abc").is_err(),
+            "an odd number of digits is not bytes"
+        );
     }
 
     #[test]

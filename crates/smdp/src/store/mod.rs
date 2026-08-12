@@ -153,8 +153,12 @@ mod tests {
         let o = s.add_order(an_order()).unwrap();
         assert!(o.eid.is_none() && o.euicc_cert.is_none());
 
-        s.bind_euicc(o.id, "89049032123451234512345678901235", &[0x30, 0x82, 0x01])
-            .unwrap();
+        s.bind_euicc(
+            o.id,
+            "89049032123451234512345678901235",
+            &[0x30, 0x82, 0x01],
+        )
+        .unwrap();
         s.set_state(o.id, OrderState::Bound).unwrap();
 
         let f = s.order_by_iccid(&ICCID).unwrap().unwrap();
