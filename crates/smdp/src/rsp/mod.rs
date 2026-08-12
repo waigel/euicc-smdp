@@ -6,45 +6,15 @@ pub use owned::OwnedDer;
 
 use std::ffi::CString;
 use std::ptr;
-use std::sync::{Mutex, MutexGuard};
-
-/// euicc-rsp cannot yet be called from more than one thread at once, so
-/// this serializes every call into it.
-///
-/// Two causes were found, and only one is fixed. euicc-rsp's own
-/// `src/rsp_sign.c` used to keep its RNG in an unsynchronised lazy
-/// singleton; that is gone -- it builds one per call now, and that
-/// library's `tests/test_threads.c` signs from eight threads at 755%
-/// CPU without crashing.
-///
-/// What remains is inside mbedTLS. With the lock removed, five of
-/// twelve runs still crash, and the backtrace lands in
-/// `mbedtls_sha512_update` with a NULL context -- mbedTLS's entropy
-/// accumulator, reached from separate per-call contexts, which means the
-/// shared state is mbedTLS's own. That is what `MBEDTLS_THREADING_C`
-/// exists for, and it is still off in the vendored copy.
-///
-/// Turning it on is not a one-line change: it adds mutex members to
-/// mbedTLS contexts, so every consumer of that vendored copy --
-/// euicc-lpa and euicc-tools included -- would have to be compiled
-/// against the same configuration or the struct layouts disagree. Until
-/// that is done deliberately, this lock stays.
-///
-/// A per-session lock would not do: the collision is between *different*
-/// sessions. So it lives here, at the only boundary every caller has to
-/// cross, rather than in the server where a second consumer could
-/// forget it.
-static RSP_LOCK: Mutex<()> = Mutex::new(());
-
-/// Poisoning is not meaningful here: the guard protects a C library's
-/// internals, not a Rust invariant this crate could observe as broken.
-/// A panic in one call must not make every later one fail.
-fn lock() -> MutexGuard<'static, ()> {
-    RSP_LOCK.lock().unwrap_or_else(|e| e.into_inner())
-}
 
 /// One RSP session's server-side state, from InitiateAuthentication to
 /// GetBoundProfilePackage.
+///
+/// There is no lock around the C calls any more. There used to be:
+/// euicc-rsp kept its signing RNG in an unsynchronised singleton, and
+/// its vendored mbedTLS was built without MBEDTLS_THREADING_C. Both are
+/// fixed upstream, and `tests/session.rs` measures it -- 20 runs of
+/// eight threads, no crash.
 ///
 /// Dropping it calls `rsp_dp_session_free`, which zeroizes rather than
 /// merely freeing -- the SCP03t session keys land in here.
@@ -54,7 +24,6 @@ pub struct DpSession {
 
 impl Drop for DpSession {
     fn drop(&mut self) {
-        let _guard = lock();
         unsafe { rsp_sys::rsp_dp_session_free(self.raw) }
     }
 }
@@ -92,7 +61,6 @@ impl DpSession {
         let mut resp: *mut u8 = ptr::null_mut();
         let mut resp_len: usize = 0;
 
-        let _guard = lock();
         let rc = unsafe {
             rsp_sys::rsp_dp_initiate_authentication(
                 euicc_challenge.as_ptr(),
@@ -144,7 +112,6 @@ impl DpSession {
         const WHAT: &str = "AuthenticateClient";
         let mut out: *mut u8 = ptr::null_mut();
         let mut out_len: usize = 0;
-        let _guard = lock();
         let rc = unsafe {
             rsp_sys::rsp_dp_authenticate_client(
                 self.raw,
@@ -176,7 +143,6 @@ impl DpSession {
         const WHAT: &str = "GetBoundProfilePackage";
         let mut bpp: *mut u8 = ptr::null_mut();
         let mut bpp_len: usize = 0;
-        let _guard = lock();
         let rc = unsafe {
             rsp_sys::rsp_dp_get_bound_profile_package(
                 self.raw,
@@ -202,7 +168,6 @@ impl DpSession {
         const WHAT: &str = "session EID";
         let mut buf = [0u8; 64];
         let mut len: usize = 0;
-        let _guard = lock();
         let rc = unsafe {
             rsp_sys::rsp_dp_session_eid(self.raw, buf.as_mut_ptr(), buf.len(), &mut len)
         };
